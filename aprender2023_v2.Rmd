@@ -1,0 +1,976 @@
+---
+title: "Aprender_2023"
+author: "Grupo9"
+date: "2024-12-13"
+output: html_document
+---
+
+```{r}
+# Cargamos librerías
+library(tidyverse)
+library(lme4)
+library(broom.mixed)
+library(knitr)
+library(patchwork)
+library(GGally)
+library(car)
+library(MuMIn)
+library(readr)
+library(nlme)
+library(kableExtra)
+```
+
+```{r}
+# Cargamos los datos
+path = "./"
+file_name = "Estudiantes_Primaria_2023.csv"
+full_path_train = file.path(path, file_name)
+df <- read_delim(full_path_train, delim = ";")
+
+head(df)
+```
+
+```{r}
+glimpse(df)
+```
+
+## Análisis Exploratorio
+
+El presente análisis se enfoca en los resultados de las **Pruebas Aprender**, una instancia evaluativa nacional que mide los aprendizajes de los estudiantes y sistematiza información sobre las condiciones en las que ellos se desarrollan. En particular, se analizarán los datos correspondientes al año 2023.
+
+El dataset cuenta con **206 variables**, entre las que se incluyen datos del contexto social y educativo, así como los resultados en diferentes áreas de aprendizaje.
+
+Este análisis se centrará en un subconjunto de variables relevantes para responder preguntas de interés. A continuación, se describen las principales variables seleccionadas:
+
+### Descripción de Variables
+
+### Variables Contextuales
+
+-   **`ID1`**: Identificador único del establecimiento. *(Categórica Nominal)*
+-   **`Jurisdiccion`**: Provincia donde se sitúa el colegio. *(Categórica nominal)*
+-   **`Region`**: Región de Argentina donde se encuentra el colegio. *(Categórica nominal)*
+-   **`Seccion`**: Sector al que pertenece la institución educativa (ámbito estatal o privado). *(Categórica nominal)*
+-   **`Ambito`**: Si el colegio es rural o privado. *(Categórica nominal)*
+
+### Características del Estudiante
+
+-   **`ap01`**: Edad del estudiante. *(Categórica ordinal)*
+-   **`ap02`**: Mes de su cumpleaños. *(Categórica ordinal)*
+-   **`ap03`**: Sexo registrado en su DNI. *(Categórica nominal)*
+-   **`ap04`**: País de nacimiento del estudiante. *(Categórica nominal)*
+
+### Resultados Académicos
+
+-   **`ldesemp` y `mdesemp`**: Nivel de desempeño en Lengua y Matemática, respectivamente.*(Categórica ordinal)*
+-   **`lpuntaje` y `mpuntaje`**: Nota obtenida en Lengua y Matemática. *(Cuantitativa continua)*
+-   **`lpondera` y `mpondera`**: Ponderadores de desempeño para las notas en las materias nombradas anteriormente. *(Cuantitativa Continua)*
+
+### Contexto Familiar
+
+-   **`NSE_Nivel`**: Nivel socioeconómico del estudiante. *(Categórica ordinal)*
+-   **`Nivel_Ed_Madre`**: Nivel educativo alcanzado por la madre. *(Categórica ordinal)*
+-   **`Nivel_Ed_Padre`**: Nivel educativo alcanzado por el padre. *(Categórica ordinal)*
+
+Además de las variables mencionadas, el dataset incluye información adicional sobre actividades extracurriculares, valores aprendidos en el colegio y más. Para obtener detalles completos, se incluye un diccionario de datos adjunto.
+
+```{r}
+dataset <- df[, c("ID1" ,"region", "jurisdiccion", "ambito", "sector", "ap01", "ap02", "ap03", "ap04", "lpondera", "mpondera","ldesemp", "lpuntaje", "mdesemp", "mpuntaje",  "NSE_nivel", "Nivel_Ed_Madre", "Nivel_Ed_Padre")]
+glimpse(dataset)
+```
+
+Pudiendo ver más fácilmente las variables de nuestro interés, podemos notar:
+
+-   Las variables de puntaje: lpuntaje, mpuntaje y lpondera y mpondera están todas como carácteres. Por lo tanto hay que realizar su pertinente transformación.
+
+```{r}
+# Reemplazar comas por puntos y convertir a numérico
+dataset$lpuntaje <- as.numeric(gsub(",", ".", dataset$lpuntaje, fixed = TRUE))
+dataset$mpuntaje <- as.numeric(gsub(",", ".", dataset$mpuntaje, fixed = TRUE))
+dataset$lpondera <- as.numeric(gsub(",", ".", dataset$lpondera, fixed = TRUE))
+dataset$mpondera <- as.numeric(gsub(",", ".", dataset$mpondera, fixed = TRUE))
+str(dataset[, c("lpondera", "mpondera","lpuntaje", "mpuntaje")])
+
+```
+
+Tenemos también presencia de valores faltantes y valores multimarca. Por lo tanto, se procederá a reemplazalos por NA, para remover esos registros posteriormente.
+
+```{r}
+# Reemplazamos todos los valores faltantes y multimarca por NA
+dataset <- dataset %>%
+  mutate(across(everything(), ~ ifelse(.x == "-9" | .x == "-8" | .x == "-6", NA, .x)))
+```
+
+Renombramos algunas variables y cambiamos los codigos numéricos por los valores correspondientes.
+
+```{r}
+# Recategorizamos las variables categóricas y pasamos a factores
+
+# Renombramos las columnas
+dataset <- dataset %>%
+  rename(
+    cod_establecimiento = ID1,
+    edad = ap01,
+    mes = ap02,
+    sexo = ap03,
+    pais_origen = ap04
+  )
+
+# Crear las etiquetas como listas
+label_map <- list(
+  edad = list("1" = "10 años o menos", "2" = "11 años", "3" = "12 años",
+           "4" = "13 años", "5" = "14 años o más"),
+  sexo = list("1" = "Masculino", "2" = "Femenino", "3" = "X"),
+  pais_origen = list("1" = "Argentina", "2" = "Bolivia", "3" = "Brasil",
+                  "4" = "Chile", "5" = "Colombia", "6" = "Ecuador",
+                  "7" = "Paraguay", "8" = "Perú", "9" = "Uruguay",
+                  "10" = "Venezuela", "11" = "Otro país de América",
+                  "12" = "En un país de Europa", "13" = "En un país de Asia",
+                  "14" = "En un país de África", "15" = "Otro"),
+  jurisdiccion = list("02" = "Ciudad Autónoma de Buenos Aires", "06" = "Buenos Aires",
+                   "10" = "Catamarca", "14" = "Córdoba",
+                   "18" = "Corrientes", "22" = "Chaco",
+                   "26" = "Chubut", "30" = "Entre Ríos",
+                   "34" = "Formosa", "38" = "Jujuy",
+                   "42" = "La Pampa", "46" = "La Rioja",
+                   "50" = "Mendoza", "54" = "Misiones",
+                   "58" = "Neuquén", "62" = "Río Negro",
+                   "66" = "Salta", "70" = "San Juan",
+                   "74" = "San Luis", "78" = "Santa Cruz",
+                   "82" = "Santa Fe", "86" = "Santiago del Estero",
+                   "90" = "Tucumán", "94" = "Tierra del Fuego, Antártida e Islas del Atlántico Sur"),
+  ambito = list("1" = "Rural", "2" = "Urbano"),
+  sector = list("1" = "Estatal", "2" = "Privado"),
+  ldesemp = list("1" =	"Por debajo del nivel básico", "2" =	"Básico",
+              "3"	= "Satisfactorio", "4" =	"Avanzado"),
+  mdesemp = list("1" =	"Por debajo del nivel básico", "2" =	"Básico",
+              "3"	= "Satisfactorio", "4" =	"Avanzado"),
+  NSE_nivel = list("1" = "Bajo", "2" = "Medio", "3" = "Alto"),
+  Nivel_Ed_Madre = list("1" = "No fue a la escuela", "2" = "Primaria incompleta",
+                     "3" = "Primaria completa", "4" = "Secundaria incompleta",
+                     "5" = "Secundaria completa", "6" = "Terciario/universitario/posgrado incompleto",
+                     "7" = "Terciario/universitario/posgrado completo"),
+  Nivel_Ed_Padre = list("1" = "No fue a la escuela", "2" = "Primaria incompleta",
+                     "3" = "Primaria completa", "4" = "Secundaria incompleta",
+                     "5" = "Secundaria completa", "6" = "Terciario/universitario/posgrado incompleto",
+                     "7" = "Terciario/universitario/posgrado completo")
+)
+
+# usar label map para convertir a factores
+dataset <- dataset %>%
+  mutate(across(c(edad, sexo, pais_origen, jurisdiccion, ambito, sector, ldesemp, mdesemp, NSE_nivel, Nivel_Ed_Madre, Nivel_Ed_Padre),
+                ~ factor(.x, levels = names(label_map[[cur_column()]]), labels = label_map[[cur_column()]])))
+
+```
+
+```{r}
+# Aplicamos los ponderadores a los puntajes
+dataset <- dataset %>%
+  mutate(lpuntaje_pond = lpuntaje * lpondera,
+         mpuntaje_pond = mpuntaje * mpondera)
+```
+
+```{r}
+#Análisis de valores faltantes
+valores_faltantes <- dataset %>%
+  summarise_all(~ sum(is.na(.)))
+
+print(valores_faltantes)
+```
+
+Tenemos algunos valores faltantes. Para simplificar el trabajo eliminaremos estos registros.
+
+```{r}
+#Hago una pequeña limpieza, ya que necesitaria que mis valores de interés no sean nulos.
+aprender <- dataset %>%
+  drop_na()
+
+# Veo cuántos registros quedan después de eliminar valores faltantes
+cat("Número de registros originales:", nrow(dataset), "\n")
+cat("Número de registros después de limpiar:", nrow(aprender), "\n")
+
+# Verificar si hay valores faltantes en el nuevo dataset
+valores_faltantes_clean <- aprender %>%
+  summarise_all(~ sum(is.na(.)))
+
+print(valores_faltantes_clean)
+```
+
+## Análisis Descriptivo
+
+
+
+```{r}
+# Paleta de colores personalizada
+paleta_categoria <- c(
+  "#fa3a2f", "#879a9f", "#97005d", "#eba20f", "#d38496", "#fff6e1", "#ce630c", "#adc3c3"
+  )
+
+paleta_escala <- c(
+  "#fff6e1", "#ffe6e1", "#eba20f", "#ff8200", "#ce630c", "#fa3a2f", "#ff0000"
+  )
+```
+
+Observamos la variable respuesta
+
+```{r}
+
+# Puntajes
+resumen_puntajes <- aprender %>%
+  summarise(
+    media_lengua = mean(lpuntaje, na.rm = TRUE),
+    mediana_lengua = median(lpuntaje, na.rm = TRUE),
+    sd_lengua = sd(lpuntaje, na.rm = TRUE),
+    media_matematica = mean(mpuntaje, na.rm = TRUE),
+    mediana_matematica = median(mpuntaje, na.rm = TRUE),
+    sd_matematica = sd(mpuntaje, na.rm = TRUE)
+  )
+
+print(resumen_puntajes)
+
+# Histogramas para puntajes
+
+# Histograma de Lengua
+hist_lengua <- ggplot(aprender, aes(x = lpuntaje)) +
+  geom_histogram(binwidth = 10, fill = "#97005d", color = "black") +
+  geom_vline(aes(xintercept = mean(lpuntaje, na.rm = TRUE)), color = "darkgreen", linetype = "solid") + # Línea para la media
+  geom_vline(aes(xintercept = median(lpuntaje, na.rm = TRUE)), color = "darkred", linetype = "longdash") + # Línea para la mediana
+  labs(title = "Distribución de Puntajes en Lengua", x = "Puntaje", y = "Frecuencia") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, max(aprender$lpuntaje, na.rm = TRUE), by = 100)) +
+  theme(
+    plot.title = element_text(size = 20),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 12)
+  )
+
+# Histograma de Matemática
+hist_matematica <- ggplot(aprender, aes(x = mpuntaje)) +
+  geom_histogram(binwidth = 10, fill = "#fff6e1", color = "black") +
+  geom_vline(aes(xintercept = mean(mpuntaje, na.rm = TRUE)), color = "darkgreen", linetype = "solid") + # Línea para la media
+  geom_vline(aes(xintercept = median(mpuntaje, na.rm = TRUE)), color = "darkred", linetype = "longdash") + # Línea para la mediana
+  labs(title = "Distribución de Puntajes en Matemática", x = "Puntaje", y = "Frecuencia") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, max(aprender$mpuntaje, na.rm = TRUE), by = 100)) +
+  theme(
+    plot.title = element_text(size = 20),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 12)
+  )
+# Mostrar gráficos en una ventana grande
+library(gridExtra)
+grid.arrange(hist_lengua, hist_matematica, ncol = 1)
+
+```
+
+```{r}
+
+# Frecuencia y proporciones para ver cuántos registros son por provincia y region
+
+region <- aprender %>%
+  count(region) %>%
+  mutate(porcentaje = round((n / sum(n)) * 100, 1))
+
+provincias <- aprender %>%
+  count(jurisdiccion) %>%
+  mutate(porcentaje = round((n / sum(n)) * 100, 1))
+
+kable(region, caption = "Registros por Region") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = TRUE) %>%
+  kable_classic(full_width = F, html_font = "Arial")
+
+kable(provincias, caption = "Registros por provincia") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = TRUE) %>%
+  kable_classic(full_width = F, html_font = "Arial")
+
+# Gráfico de barras
+(plot <- ggplot(provincias, aes(x = reorder(jurisdiccion, n), y = n)) +
+  geom_bar(stat = "identity", fill = "#d38496") +
+  coord_flip() +
+  labs(title = "Distribución por Provincias", x = "Provincias", y = "Frecuencia")+
+  theme(
+    plot.title = element_text(size = 20),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 12)
+  ) +
+  theme_minimal())
+
+# save plot
+ggsave("plot.png", plot, width = 10, height = 6, units = "in")
+
+```
+
+En general, los estudiantes parecen tener un rendimiento algo mejor en Lengua (media más alta) que en Matemática.
+
+```{r}
+# Tabla de frecuencias para el Nivel Socioeconómico
+tabla_nse <- aprender %>%
+  count(NSE_nivel) %>%
+  mutate(porcentaje = round((n / sum(n)) * 100, 1))
+
+print(tabla_nse)
+
+# NSE_Nivel sea una variable categórica.
+tabla_nse$NSE_nivel <- as.factor(tabla_nse$NSE_nivel)
+
+ggplot(tabla_nse, aes(x = "", y = n, fill = NSE_nivel)) +
+  geom_bar(stat = "identity", width = 1, color = "black") +  # Añadir bordes a las divisiones
+  coord_polar(theta = "y") +
+  geom_text(aes(label = paste0(porcentaje, "%")),
+            position = position_stack(vjust = 0.5),
+            size = 4,
+            color = "black") +
+  labs(title = "Distribución por Nivel Socioeconómico", x = "", y = "") +
+  scale_fill_manual(values = tail(paleta_categoria,3)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20),
+    axis.title = element_text(size = 16),
+    axis.text.x = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(), # Eliminar cuadrícula
+    panel.background = element_blank(), # Fondo transparente
+    plot.background = element_blank()   # Fondo transparente
+  ) +
+  guides(fill = guide_legend(title = "Nivel Socioeconómico"))
+```
+
+```{r}
+summary(aprender)
+```
+
+```{r}
+puntajes <- aprender[, c("lpuntaje","mpuntaje")]
+
+
+# Ajustar opciones globales para evitar notación científica
+options(scipen = 999)
+
+minimos <- round(apply(puntajes, 2, min, na.rm = TRUE), 2)
+maximos <- round(apply(puntajes, 2, max, na.rm = TRUE), 2)
+medias <- round(colMeans(puntajes, na.rm = TRUE), 2)
+medianas <- round(apply(puntajes, 2, median, na.rm = TRUE), 2)
+varianzas <- round(apply(puntajes, 2, var, na.rm = TRUE), 2)
+desviaciones_estandar <- round(apply(puntajes, 2, sd, na.rm = TRUE), 2)
+coeficientes_de_variacion <- round(desviaciones_estandar / medias, 2)
+cuartiles_1 <- round(apply(puntajes, 2, quantile, probs = 0.25, na.rm = TRUE), 2)
+cuartiles_3 <- round(apply(puntajes, 2, quantile, probs = 0.75, na.rm = TRUE), 2)
+rango_intercuartilico <- round(cuartiles_3 - cuartiles_1, 2)
+
+# Crear tabla con medidas descriptivas
+tabla_descriptiva <- data.frame(
+  n = colSums(!is.na(puntajes)),
+  Minimo = minimos,
+  Maximo = maximos,
+  Media = medias,
+  Mediana = medianas,
+  Varianza = varianzas,
+  "Desv_Estandar" = desviaciones_estandar,
+  "Coef_Variacion" = coeficientes_de_variacion,
+  "Cuartil 1" = cuartiles_1,
+  "Cuartil 3" = cuartiles_3,
+  "Rango_Intercuartilico" = rango_intercuartilico
+)
+
+# Mostrar tabla con formato
+kable(tabla_descriptiva, caption = "Tabla Descriptiva de Medidas Estadísticas de los Puntajes de los estudiantes") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = TRUE) %>%
+  kable_classic(full_width = F, html_font = "Arial")
+```
+
+-   Varianza y Desviación Estándar:
+
+La varianza y la desviación estándar son ligeramente más altas en Lengua (varianza: 8263.99, DE: 90.91) que en Matemática (varianza: 7734.93, DE: 87.95), lo que indica que los puntajes en Lengua están un poco más dispersos que en Matemática.
+
+-   Coeficiente de Variación (CV):
+
+Ambos tienen un coeficiente de variación bajo (0.18 en ambos casos), lo que indica que la dispersión relativa es pequeña en comparación con las medias respectivas. Esto sugiere que los puntajes son bastante consistentes entre los estudiantes.
+
+-   Rangos generales:
+
+En Lengua, los puntajes van de 244.15 a 757.93, mientras que en Matemática van de 212.01 a 739.70. Significa que hay mayor presencia de notas bajas en matemática.
+
+-   Cuartiles:
+
+En Lengua, el 50% central de los estudiantes se encuentra entre 428.75 y 564.78. En Matemática, este rango va de 411.22 a 539.85, lo que significa que los puntajes de Matemática están, en promedio, más bajos que los de Lengua.
+
+```{r}
+# Correlación entre puntajes
+correlacion_puntajes <- cor(puntajes , use = "pairwise.complete.obs")
+correlacion_puntajes
+```
+
+```{r}
+# Distribucion de variables sexo, edad, ambito, sector
+
+# Sexo
+sexo <- aprender %>%
+  count(sexo) %>%
+  mutate(porcentaje = round((n / sum(n)) * 100, 1))
+
+# Edad
+edad <- aprender %>%
+  count(edad) %>%
+  mutate(porcentaje = round((n / sum(n)) * 100, 1))
+
+# Ambito
+ambito <- aprender %>%
+  count(ambito) %>%
+  mutate(porcentaje = round((n / sum(n)) * 100, 1))
+
+# Sector
+sector <- aprender %>%
+  count(sector) %>%
+  mutate(porcentaje = round((n / sum(n)) * 100, 1))
+
+# Crear gráficos de barras
+sexo_plot <- ggplot(sexo, aes(x = sexo, y = n, fill = sexo)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(porcentaje, "%")),
+            position = position_stack(vjust = 0.5),
+            size = 4,
+            color = "black") +
+  labs(title = "Distribución por Sexo", x = "Sexo", y = "Frecuencia") +
+  scale_fill_manual(values = c("#242c4f", "#efeeed", "#d38496", "#97005d", "#fff6e1")) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+edad_plot <- ggplot(edad, aes(x = edad, y = n, fill = edad)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(porcentaje, "%")),
+            position = position_stack(vjust = 0.5),
+            size = 4,
+            color = "black") +
+  labs(title = "Distribución por Edad", x = "Edad", y = "Frecuencia") +
+  scale_fill_manual(values = c("#242c4f", "#efeeed", "#d38496", "#97005d", "#fff6e1")) +
+  theme_minimal() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+ambito_plot <- ggplot(ambito, aes(x = ambito, y = n, fill = ambito)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(porcentaje, "%")),
+            position = position_stack(vjust = 0.5),
+            size = 4,
+            color = "black") +
+  labs(title = "Distribución por Ámbito", x = "Ámbito", y = "Frecuencia") +
+  scale_fill_manual(values = c("#242c4f", "#efeeed", "#d38496", "#97005d", "#fff6e1")) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+sector_plot <- ggplot(sector, aes(x = sector, y = n, fill = sector)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(porcentaje, "%")),
+            position = position_stack(vjust = 0.5),
+            size = 4,
+            color = "black") +
+  labs(title = "Distribución por Sector", x = "Sector", y = "Frecuencia") +
+  scale_fill_manual(values = c("#242c4f", "#efeeed", "#d38496", "#97005d", "#fff6e1")) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Mostrar gráficos en una ventana grande
+sexo_plot
+edad_plot
+ambito_plot
+sector_plot
+```
+
+```{r}
+color_Vec <- c("#f8c8d4", "#f0a8b5", "#d38496", "#c56d7e", "#b35768", "#a04151", "#8f2b3b")
+
+# Distribucion por Nivel Educativo de la Madre
+nivel_ed_madre <- aprender %>%
+  count(Nivel_Ed_Madre) %>%
+  mutate(porcentaje = round((n / sum(n)) * 100, 1))
+
+# Distribucion por Nivel Educativo del Padre
+nivel_ed_padre <- aprender %>%
+  count(Nivel_Ed_Padre) %>%
+  mutate(porcentaje = round((n / sum(n)) * 100, 1))
+
+# Crear gráficos de barras
+nivel_ed_madre_plot <- ggplot(nivel_ed_madre, aes(x = Nivel_Ed_Madre, y = n, fill = Nivel_Ed_Madre)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(porcentaje, "%")),
+            position = position_stack(vjust = 0.5),
+            size = 4,
+            color = "black") +
+  labs(title = "Distribución por Nivel Educativo de la Madre", x = "Nivel Educativo de la Madre", y = "Frecuencia") +
+  scale_fill_manual(values = color_Vec) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())
+
+nivel_ed_padre_plot <- ggplot(nivel_ed_padre, aes(x = Nivel_Ed_Padre, y = n, fill = Nivel_Ed_Padre)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(porcentaje, "%")),
+            position = position_stack(vjust = 0.5),
+            size = 4,
+            color = "black") +
+  labs(title = "Distribución por Nivel Educativo del Padre", x = "Nivel Educativo del Padre", y = "Frecuencia") +
+  scale_fill_manual(values = color_Vec) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(), legend.position = "none")
+
+# Mostrar gráficos en una ventana grande
+nivel_ed_madre_plot
+nivel_ed_padre_plot
+
+```
+
+```{r}
+# Boxplot de puntajes por sexo
+boxplot_lengua <- ggplot(aprender, aes(x = sexo, y = lpuntaje, fill = sexo)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Lengua por Sexo", x = "Sexo", y = "Puntaje") +
+  theme_minimal()
+
+boxplot_matematica <- ggplot(aprender, aes(x = sexo, y = mpuntaje, fill = sexo)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Matemática por Sexo", x = "Sexo", y = "Puntaje") +
+  theme_minimal()
+
+# Mostrar gráficos en una ventana grande
+grid.arrange(boxplot_lengua, boxplot_matematica, ncol = 1)
+```
+
+```{r}
+# Boxplot de puntajes por ámbito
+boxplot_lengua <- ggplot(aprender, aes(x = ambito, y = lpuntaje, fill = ambito)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Lengua por Ámbito", x = "Ámbito", y = "Puntaje") +
+  theme_minimal()
+
+boxplot_matematica <- ggplot(aprender, aes(x = ambito, y = mpuntaje, fill = ambito)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Matemática por Ámbito", x = "Ámbito", y = "Puntaje") +
+  theme_minimal()
+
+# Mostrar gráficos en una ventana grande
+grid.arrange(boxplot_lengua, boxplot_matematica, ncol = 1)
+```
+
+```{r}
+# Boxplot de puntajes por sector
+boxplot_lengua <- ggplot(aprender, aes(x = sector, y = lpuntaje, fill = sector)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Lengua por Sector", x = "Sector", y = "Puntaje") +
+  theme_minimal()
+
+boxplot_matematica <- ggplot(aprender, aes(x = sector, y = mpuntaje, fill = sector)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Matemática por Sector", x = "Sector", y = "Puntaje") +
+  theme_minimal()
+
+# Mostrar gráficos en una ventana grande
+grid.arrange(boxplot_lengua, boxplot_matematica, ncol = 1)
+```
+
+```{r}
+# Boxplot de puntajes por nivel socioeconómico
+boxplot_lengua <- ggplot(aprender, aes(x = NSE_nivel, y = lpuntaje, fill = NSE_nivel)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Lengua por Nivel Socioeconómico", x = "Nivel Socioeconómico", y = "Puntaje") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+boxplot_matematica <- ggplot(aprender, aes(x = NSE_nivel, y = mpuntaje, fill = NSE_nivel)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Matemática por Nivel Socioeconómico", x = "Nivel Socioeconómico", y = "Puntaje") +
+  theme_minimal()
+
+boxplot_lengua
+```
+
+```{r}
+# Boxplot de puntajes por nivel educativo de la madre
+boxplot_lengua <- ggplot(aprender, aes(x = Nivel_Ed_Madre, y = lpuntaje, fill = Nivel_Ed_Madre)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Lengua por Nivel Educativo de la Madre", x = "Nivel Educativo de la Madre", y = "Puntaje") +
+  theme_minimal()
+
+boxplot_matematica <- ggplot(aprender, aes(x = Nivel_Ed_Madre, y = mpuntaje, fill = Nivel_Ed_Madre)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Matemática por Nivel Educativo de la Madre", x = "Nivel Educativo de la Madre", y = "Puntaje") +
+  theme_minimal()
+
+# Mostrar gráficos en una ventana grande
+grid.arrange(boxplot_lengua, boxplot_matematica, ncol = 1)
+```
+
+```{r}
+# Boxplot de puntajes por nivel educativo del padre
+boxplot_lengua <- ggplot(aprender, aes(x = Nivel_Ed_Padre, y = lpuntaje, fill = Nivel_Ed_Padre)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Lengua por Nivel Educativo del Padre", x = "Nivel Educativo del Padre", y = "Puntaje") +
+  theme_minimal()
+
+boxplot_matematica <- ggplot(aprender, aes(x = Nivel_Ed_Padre, y = mpuntaje, fill = Nivel_Ed_Padre)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Matemática por Nivel Educativo del Padre", x = "Nivel Educativo del Padre", y = "Puntaje") +
+  theme_minimal()
+
+# Mostrar gráficos en una ventana grande
+grid.arrange(boxplot_lengua, boxplot_matematica, ncol = 1)
+```
+
+```{r}
+# Boxplot de puntajes por región
+boxplot_lengua <- ggplot(aprender, aes(x = region, y = lpuntaje, fill = region)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Lengua por Región", x = "Región", y = "Puntaje") +
+  theme_minimal()
+
+boxplot_matematica <- ggplot(aprender, aes(x = region, y = mpuntaje, fill = region)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Matemática por Región", x = "Región", y = "Puntaje") +
+  theme_minimal()
+
+# Mostrar gráficos en una ventana grande
+grid.arrange(boxplot_lengua, boxplot_matematica, ncol = 1)
+```
+
+```{r}
+library(forcats)
+
+# Boxplot de puntajes por jurisdicción, sin etiquetas eje x ni leyendas, colorear y ordenar por region
+boxplot_lengua <- ggplot(aprender, aes(x = fct_reorder(jurisdiccion, desc(desc(region))), y = lpuntaje, fill = region)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Lengua por Jurisdicción", x = "Jurisdicción", y = "Puntaje") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) + 
+  scale_fill_manual(values = c("#242c4f", "#efeeed", "#d38496", "#97005d", "#fff6e1"))
+
+boxplot_matematica <- ggplot(aprender, aes(x = fct_reorder(jurisdiccion, desc(desc(region))), y = mpuntaje, fill = region)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Matemática por Jurisdicción", x = "Jurisdicción", y = "Puntaje") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(), axis.title.x = element_blank())
+
+boxplot_lengua
+```
+
+```{r}
+# Boxplot de puntajes por país de origen
+boxplot_lengua <- ggplot(aprender, aes(x = pais_origen, y = lpuntaje, fill = head(paleta_categoria, 1))) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Lengua por País de Origen", x = "País de Origen", y = "Puntaje") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none") +
+  scale_fill_manual(values = "#d38496")
+
+boxplot_matematica <- ggplot(aprender, aes(x = pais_origen, y = mpuntaje, fill = pais_origen)) +
+  geom_boxplot() +
+  labs(title = "Puntajes en Matemática por País de Origen", x = "País de Origen", y = "Puntaje") +
+  theme_minimal() 
+
+# Mostrar gráficos en una ventana grande
+boxplot_lengua
+```
+
+```{r}
+# Scatterplot de puntajes en Lengua y Matemática
+scatterplot <- ggplot(aprender, aes(x = lpuntaje, y = mpuntaje)) +
+  geom_point(alpha = 0.5, color = paleta_categoria[2]) +
+  geom_smooth(method = "lm", se = FALSE, color = paleta_categoria[1]) +
+  labs(title = "Puntajes en Lengua vs. Matemática", x = "Puntaje en Lengua", y = "Puntaje en Matemática") +
+  theme_minimal()
+
+scatterplot
+```
+
+
+# Modelo Lineal Múltiple
+
+Realizaremos un modelo base para el puntaje en Lengua, utilizando las variables NSE_nivel, Nivel_Ed_Madre, Nivel_Ed_Padre como predictores.
+
+El modelo lineal es:
+
+$$ Puntaje = \beta_0 + \beta_1NSE\_nivel + \beta_2Nivel\_Ed\_Madre + \beta_3Nivel\_Ed\_Padre + \epsilon $$
+
+```{r}
+# Modelo lineal para puntaje en Lengua
+modelo_lengua <- lm(lpuntaje ~ NSE_nivel + Nivel_Ed_Madre + Nivel_Ed_Padre,
+                    data = aprender,
+                    weights = sqrt(aprender$lpondera))
+
+# Resumen del modelo
+summary(modelo_lengua)
+```
+
+```{r}
+# Visualizamos en una tabla los coeficientes del modelo 
+library(sjPlot)
+tab_model(modelo_lengua, file = "modelo_lengua.html")
+```
+
+
+
+
+Los coeficientes indican que en los tres casos, un incremento en el predictor se asocia con un aumento en el puntaje. Aunque en el caso del nivel educativo tanto del padre como de la madre, el efecto es mas fuerte con nivel incompleto que completo.
+
+Observamos un modelo con todos coeficientes significativos, pero que no llega a explicar mas que el 7% de la varianza en el puntaje. Probamos incluir ambito y sector.
+
+El modelo es
+
+$$ Puntaje = \beta_0 + \beta_1NSE\_nivel + \beta_2Nivel\_Ed\_Madre + \beta_3Nivel\_Ed\_Padre + \beta_4ambito + \beta_5sector + \epsilon $$
+
+```{r}
+# Modelo lineal para puntaje en Lengua
+modelo_lineal <- lm(lpuntaje ~ NSE_nivel + Nivel_Ed_Madre + Nivel_Ed_Padre + ambito + sector,
+                    data = aprender,
+                    weights = sqrt(aprender$lpondera))
+
+# Resumen del modelo
+summary(modelo_lineal)
+```
+
+```{r}
+# Visualizamos en una tabla los coeficientes del modelo
+tab_model(modelo_lineal, file = "modelo_lineal.html")
+```
+
+
+Observamos que mejora el porcentaje de variabilidad explicada a un 11,56%. Sin embargo sigue siendo un valor bajo. Esto se debe a varias cuestiones.
+
+Por un lado, existen muchos factores que influyen en el rendimiento de los estudiantes durante una prueba estandarizada, algo que no podremos incluir necesariamente en nuestro modelo. Pero por otro, y mas relevante para nuestro problema, es que no hay total independencia en las observaciones, ya que los estudiantes están agrupados por escuela, jurisdicción y región. Esto puede llevar a que los errores estén correlacionados, lo que puede afectar la validez de los intervalos de confianza y los tests de hipótesis.
+
+Para esto debemos incluir como efectos aleatorios a estas variables, para controlar la variabilidad.
+
+# Modelo Lineal con Efectos Mixtos
+
+Realizamos un primer modelo, incluyendo país de orígen y escuela/region/jurisdicción como efectos aleatorios con intercepto variable
+
+El modelo es:
+
+$$ Puntaje = \beta_0 + \beta_1NSE\_nivel + \beta_2Nivel\_Ed\_Madre + \beta_3Nivel\_Ed\_Padre + \beta_4ambito + \beta_5sector + \epsilon + u_{pais} + u_{region/jurisdiccion/cod\_establecimiento} $$
+
+```{r}
+mixto_intercept <- lmer(lpuntaje ~ NSE_nivel + Nivel_Ed_Madre + Nivel_Ed_Padre + ambito + sector +
+             (1|pais_origen) + (1|region/jurisdiccion/cod_establecimiento),
+  data = aprender,
+  weights = sqrt(aprender$lpondera),
+  REML = FALSE
+)
+
+# Resumen del modelo
+summary(mixto_intercept)
+
+```
+
+
+```{r results='asis'}
+library(sjPlot)
+# Generar tabla del modelo
+tab_model(
+  mixto_intercept, 
+  show.ci = FALSE,          # Mostrar intervalos de confianza
+  show.re.var = TRUE,      # Mostrar varianzas de efectos aleatorios
+  show.icc = TRUE,         # Mostrar el ICC (Intraclass Correlation Coefficient)
+  dv.labels = "Modelo: Puntaje en Lengua",  # Etiqueta para la variable dependiente
+  file = "modelo_mixto_intercept.html"  # Guardar tabla en un archivo HTML
+)
+
+```
+
+
+**Efectos variables**
+
+*Residuos (Residual)*: La mayor parte de la varianza en los puntajes está en el nivel residual (7175.11). Esto es esperable, ya que muchos factores que afectan los puntajes no están incluidos en el modelo.
+
+*pais_origen (213.28)*: Existe una variabilidad considerable entre países, lo que indica que los estudiantes de distintos países tienen puntajes esperados diferentes.
+
+*cod_establecimiento:(jurisdiccion:region) (892.65)*: Dentro de cada región y jurisdicción, los establecimientos contribuyen significativamente a la variación de los puntajes.
+
+*jurisdiccion:region (125.62)*: En menor medida, la región y la jurisdicción también contribuyen a la variabilidad en los puntajes.
+
+*region (24.03)*: al contemplar el efecto anidado del establecimiento y la jurisdicción, el efecto de la región es bastante menor.
+
+
+**Efectos Fijos**
+
+En los efectos fijos, tenemos una clase basal de estudiantes con Nivel Socioeconómico "Bajo", sin escolarización de madre y padre, en ámbito Rural y sector Público. Los coeficientes indican que, en comparación con esta clase basal, los estudiantes con Nivel Socioeconómico "Medio" y "Alto" tienen puntajes esperados respectivamente mas altos. Algo similar ocurre con el incremento en nivel educativo de madre y padre. En el caso de las madres un nivel educativo alto implica mayores incrementos del puntaje esperado respecto al mismo caso en padres.
+
+Para el ámbito, los estudiantes en ámbito Urbano tienen puntajes esperados más bajos que los de ámbito Rural. En el sector, los estudiantes en sector Privado tienen puntajes esperados más altos que los de sector Público, en una medida considerable.
+
+
+```{r}
+library(performance)
+
+# Calcular R² marginal y condicional
+r2(mixto_intercept)
+
+```
+
+El 9.1% de la varianza en los puntajes es explicada por los efectos fijos (NSE_nivel, educación de los padres, ámbito, sector), Adicionalmente el 14% de la varianza es explicada por los efectos fijos más los efectos aleatorios (país, región, jurisdicción).
+
+```{r}
+# Ver AIC y BIC del modelo
+AIC(mixto_intercept)
+BIC(mixto_intercept)
+
+```
+
+```{r}
+library(sjPlot)
+
+# Graficar efectos fijos
+plot_model(mixto_intercept, type = "est", show.values = TRUE, value.offset = 0.3)
+
+```
+
+```{r}
+# Graficar efectos aleatorios
+plot_model(
+  mixto_intercept,
+  type = "re",
+  title = "Efectos Aleatorios por Nivel"
+)
+
+```
+
+## Supuestos del modelo
+
+```{r}
+#1. Normalidad en los Residuos
+# Residuos del modelo
+residuos <- residuals(mixto_intercept)
+
+# Histograma de los residuos
+hist(residuos, main = "Distribución de los residuos", xlab = "Residuos")
+
+# Q-Q plot para verificar normalidad
+qqnorm(residuos, col = paleta_categoria[2])
+qqline(residuos, col = paleta_categoria[1], lwd = 2)
+
+```
+
+Los residuos están cercanos a la normalidad.
+
+```{r}
+#2. Homocedasticidad 
+predicciones <- predict(mixto_intercept)
+
+# Gráfico de residuos vs. valores predichos
+plot(predicciones, residuos, 
+     main = "Residuos vs. Valores Predichos", 
+     xlab = "Valores Predichos", 
+     ylab = "Residuos",
+     col = paleta_categoria[2])
+abline(h = 0, col = paleta_categoria[1], lwd = 2)
+```
+
+```{r}
+#3. Supuesto de independencia de los residuos
+library(lattice)
+
+# Residuos vs predicciones para cada grupo
+
+# 1. Por región
+xyplot(residuos ~ predicciones | aprender$region, 
+       main = "Residuos por Región", 
+       xlab = "Valores Predichos", 
+       ylab = "Residuos", 
+       layout = c(3, 2))
+
+# 2. Por jurisdicción
+xyplot(residuos ~ predicciones | aprender$jurisdiccion, 
+       main = "Residuos por Jurisdicción", 
+       xlab = "Valores Predichos", 
+       ylab = "Residuos", 
+       layout = c(4, 4))
+
+# 3. Por país de origen
+xyplot(residuos ~ predicciones | aprender$pais_origen, 
+       main = "Residuos por País de Origen", 
+       xlab = "Valores Predichos", 
+       ylab = "Residuos", 
+       layout = c(3, 2))
+
+
+```
+
+```{r}
+#4. Supuesto de normalidad en los efectos aleatorios
+# Extraer efectos aleatorios para todos los niveles
+efectos <- ranef(mixto_intercept, condVar = TRUE)
+
+# 1. Efectos aleatorios por país
+efectos_pais <- efectos$pais_origen[[1]]
+hist(efectos_pais, main = "Distribución de Efectos Aleatorios: País", xlab = "Efectos Aleatorios")
+qqnorm(efectos_pais)
+qqline(efectos_pais, col = "red", lwd = 2)
+
+# 2. Efectos aleatorios por región
+efectos_region <- efectos$region[[1]]
+hist(efectos_region, main = "Distribución de Efectos Aleatorios: Región", xlab = "Efectos Aleatorios")
+qqnorm(efectos_region)
+qqline(efectos_region, col = "red", lwd = 2)
+
+# 3. Efectos aleatorios por jurisdicción
+efectos_jurisdiccion <- efectos$`jurisdiccion:region`[[1]]
+hist(efectos_jurisdiccion, main = "Distribución de Efectos Aleatorios: Jurisdicción", xlab = "Efectos Aleatorios")
+qqnorm(efectos_jurisdiccion)
+qqline(efectos_jurisdiccion, col = "red", lwd = 2)
+
+
+```
+
+A nivel país y jurisdicción, las desviaciones de normalidad no son críticas. A nivel región, el supuesto se cumple sin problemas significativos.
+
+```{r}
+#5.Supuesto de colinealidad en efectos fijos.
+
+vif(mixto_intercept) 
+```
+
+```{r}
+#6. SUpuesto de Linealidad
+boxplot(residuos ~ aprender$NSE_nivel, 
+        main = "Residuos vs Nivel Socioeconómico", 
+        xlab = "Nivel Socioeconómico", 
+        ylab = "Residuos", 
+        col = "lightblue")
+abline(h = 0, col = "red", lwd = 2)
+
+
+boxplot(residuos ~ aprender$Nivel_Ed_Madre, 
+        main = "Residuos vs Nivel Educativo de la Madre", 
+        xlab = "Nivel_Ed_Madre", 
+        ylab = "Residuos", 
+        col = "lightgreen")
+abline(h = 0, col = "red", lwd = 2)
+
+
+boxplot(residuos ~ aprender$Nivel_Ed_Padre, 
+        main = "Residuos vs Nivel Educativo del Padre", 
+        xlab = "Nivel_Ed_Padre", 
+        ylab = "Residuos", 
+        col = "gold")
+abline(h = 0, col = "red", lwd = 2)
+
+
+boxplot(residuos ~ aprender$ambito, 
+        main = "Residuos vs ámbito del colegio", 
+        xlab = "ámbito", 
+        ylab = "Residuos", 
+        col = "salmon")
+abline(h = 0, col = "red", lwd = 2)
+
+boxplot(residuos ~ aprender$sector, 
+        main = "Residuos vs sector ", 
+        xlab = "sector", 
+        ylab = "Residuos", 
+        col = "violet")
+abline(h = 0, col = "red", lwd = 2)
+```
+
+```{r}
+#7. Supuesto de ponderación (ya que usamos peso)
+# Residuos ajustados por ponderadores
+ajustados <- residuos / sqrt(aprender$lpondera)
+plot(ajustados, main = "Residuos Ajustados por Ponderadores", xlab = "Índice", ylab = "Residuos Ajustados",
+     col = paleta_categoria[2])
+
+```
